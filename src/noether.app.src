@@ -1,0 +1,16 @@
+{application, noether, [
+    {description, "Noether Language Compiler"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {noether_app, []}},
+    {applications, [
+        kernel,
+        stdlib
+    ]},
+    {env,[]},
+    {modules, []},
+
+    {maintainers, ["Manuel Rubio"]},
+    {licenses, ["LGPL 2.1"]},
+    {links, [{"Github", "https://github.com/altenwald/noether"}]}
+ ]}.
