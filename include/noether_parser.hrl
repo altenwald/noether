@@ -32,6 +32,10 @@
 
 -define(OR(I,X,Y), erlang:'or'(I =:= X, I =:= Y)).
 
+-define(ADD_LINE(Record),
+    add_line(#Record{} = A, #state{row = R}) -> A#Record{line = R}
+).
+
 -define(IS_OP1_ARITH(X),
     X =:= <<"*">> orelse
     X =:= <<"/">> orelse
@@ -94,3 +98,14 @@
     X =:= <<"<<=">> orelse
     X =:= <<">>=">>
 ).
+
+-type access() :: undefined | public | private | protected.
+
+-record(state, {
+    row = 1 :: integer(),
+    col = 1 :: integer(),
+    access :: access(),
+    static = false :: boolean(),
+    final = false :: boolean(),
+    abstract = false :: boolean()
+}).
