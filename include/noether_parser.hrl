@@ -96,7 +96,8 @@
     X =:= <<"<=>">> orelse
     X =:= <<"**=">> orelse
     X =:= <<"<<=">> orelse
-    X =:= <<">>=">>
+    X =:= <<">>=">> orelse
+    X =:= <<">>>">>
 ).
 
 -type access() :: undefined | public | private | protected.
@@ -107,5 +108,105 @@
     access :: access(),
     static = false :: boolean(),
     final = false :: boolean(),
-    abstract = false :: boolean()
+    abstract = false :: boolean(),
+    type :: binary()
+}).
+
+-record(int, {
+    int :: integer(),
+    line :: pos_integer()
+}).
+
+-record(float, {
+    float :: float(),
+    line :: pos_integer()
+}).
+
+-record(text, {
+    text = <<>> :: binary(),
+    line :: pos_integer()
+}).
+
+-record(char, {
+    char :: byte(),
+    line :: pos_integer()
+}).
+
+-record(attribute, {
+    name :: binary(),
+    type :: binary(),
+    access :: access(),
+    static = false :: boolean(),
+    final = false :: boolean(),
+    init_value = undefined :: term(),
+    line :: pos_integer()
+}).
+
+-type attribute() :: #attribute{}.
+
+-record(method_param, {
+    name :: binary(),
+    type :: binary(),
+    line :: pos_integer()
+}).
+
+-type method_param() :: #method_param{}.
+
+-record(method, {
+    name :: binary(),
+    params = [] :: [method_param()],
+    access :: access(),
+    static = false :: boolean(),
+    final = false :: boolean(),
+    abstract = false :: boolean(),
+    return :: binary(),
+    code = [] :: [term()],
+    line :: pos_integer()
+}).
+
+-type method() :: #method{}.
+
+-record(class, {
+    name :: binary(),
+    final = false :: boolean(),
+    access :: access(),
+    abstract = false :: boolean(),
+    extends :: undefined | binary(),
+    implements = [] :: [binary()],
+    attributes = [] :: [attribute()],
+    methods = [] :: [method()],
+    line :: pos_integer()
+}).
+
+-type class() :: #class{}.
+
+-record(interface, {
+    name :: binary(),
+    methods = [] :: [method()],
+    line :: pos_integer()
+}).
+
+-type interface() :: #interface{}.
+
+-record(package, {
+    name :: binary(),
+    classes = [] :: [class()],
+    interfaces = [] :: [interface()],
+    imports = [] :: [binary()],
+    line :: pos_integer()
+}).
+
+%-type package() :: #package{}.
+
+-record(return, {
+    value :: undefined | term(),
+    line :: pos_integer()
+}).
+
+-type var_access() :: {object, binary()} | {array, binary()}.
+
+-record(variable, {
+    name = <<>> :: binary(),
+    idx = [] :: [var_access()],
+    line :: pos_integer()
 }).

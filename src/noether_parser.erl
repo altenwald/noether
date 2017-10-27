@@ -4,76 +4,14 @@
 
 -export([parse/1, file/1]).
 
--export([incr/1, incr/2, new_line/1, comment_block/2, comment_line/2]).
+-export([incr/1,
+         incr/2,
+         new_line/1,
+         comment_block/2,
+         comment_line/2,
+         key_name/3]).
 
 -include("noether_parser.hrl").
-
--record(attribute, {
-    name :: binary(),
-    type :: binary(),
-    access :: access(),
-    static = false :: boolean(),
-    final = false :: boolean(),
-    init_value = undefined :: term(),
-    line :: pos_integer()
-}).
-
--type attribute() :: #attribute{}.
-
--record(method_param, {
-    name :: binary(),
-    type :: binary(),
-    line :: pos_integer()
-}).
-
--type method_param() :: #method_param{}.
-
--record(method, {
-    name :: binary(),
-    params = [] :: [method_param()],
-    access :: access(),
-    static = false :: boolean(),
-    final = false :: boolean(),
-    abstract = false :: boolean(),
-    return :: binary(),
-    code = [] :: [term()],
-    line :: pos_integer()
-}).
-
--type method() :: #method{}.
-
--record(class, {
-    name :: binary(),
-    final = false :: boolean(),
-    access :: access(),
-    abstract = false :: boolean(),
-    extends :: undefined | binary(),
-    implements = [] :: [binary()],
-    attributes = [] :: [attribute()],
-    methods = [] :: [method()],
-    line :: pos_integer()
-}).
-
--type class() :: #class{}.
-
--record(interface, {
-    name :: binary(),
-    methods = [] :: [method()],
-    line :: pos_integer()
-}).
-
--type interface() :: #interface{}.
-
--record(package, {
-    name :: binary(),
-    classes = [] :: [class()],
-    interfaces = [] :: [interface()],
-    imports = [] :: [binary()],
-    line :: pos_integer()
-}).
-
-%-type package() :: #package{}.
-
 
 file(File) ->
     {ok, Content} = file:read_file(File),
@@ -83,14 +21,15 @@ parse(Content) when is_list(Content) ->
     parse(list_to_binary(Content));
 parse(Content) ->
     {_, _, Parsed} = document(Content, #state{}, undefined),
-    lists:reverse(Parsed).
+    Parsed.
 
 ?ADD_LINE(package);
 ?ADD_LINE(class);
 ?ADD_LINE(interface);
 ?ADD_LINE(attribute);
 ?ADD_LINE(method);
-?ADD_LINE(method_param).
+?ADD_LINE(method_param);
+?ADD_LINE(return).
 
 document(<<SP:8, Rest/binary>>, State, undefined) when ?IS_SPACE(SP) ->
     document(Rest, incr(State), undefined);
@@ -312,33 +251,55 @@ class(<<"final", SP:8, Rest/binary>>, #state{final = false} = State,
 class(<<"final", SP:8, _Rest/binary>>, State, _Class)
         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) ->
     throw({error, {eparse, State, double_final}});
+class(<<A:8, _/binary>> = Rest, #state{type = undefined} = State, Class)
+        when ?IS_ALPHA(A) orelse A =:= $_ ->
+    case key_name(Rest, State, <<>>) of
+        {<<"(", Rest0/binary>>, State0, Name} ->
+            {Rest1, State1, Method} = method(Rest0, incr(State0), Name),
+            class(Rest1, reset_state(State1), add_method(Class, Method));
+        {Rest0, State0, Type} ->
+            class(Rest0, State0#state{type = Type}, Class)
+    end;
 class(<<A:8, _/binary>> = Rest, State, Class)
         when ?IS_ALPHA(A) orelse A =:= $_ ->
     {Rest0, State0, Name} = key_name(Rest, State, <<>>),
     case remove_spaces(Rest0, State0) of
-        {<<B:8, _/binary>> = Rest1, State1}
-                when ?IS_ALPHA(B) orelse B =:= $_ ->
+        {<<"(", Rest1/binary>>, State1} ->
+            {Rest2, State2, Method} = method(Rest1, incr(State1), Name),
+            class(Rest2, reset_state(State2), add_method(Class, Method));
+        {Rest1, State1} ->
             %% TODO throw an error if abstract was set
             Attrib1 = add_line(#attribute{
-                type = Name,
+                name = Name,
+                type = State#state.type,
                 static = State#state.static,
                 access = State#state.access,
                 final = State#state.final
             }, State),
             {Rest2, State2, Attrib2} = attribute(Rest1, State1, Attrib1),
-            class(Rest2, reset_state(State2), add_attrib(Class, Attrib2));
-        {<<"(", Rest1/binary>>, State1} ->
-            {Rest2, State2, Params} = method_params(Rest1, incr(State1), []),
+            class(Rest2, reset_state(State2), add_attrib(Class, Attrib2))
+    end;
+class(<<"}", Rest/binary>>, State, Class) ->
+    {Rest, incr(State), Class}.
+
+method(Rest, State, Name) ->
+    {Rest0, State0, Params} = method_params(Rest, State, []),
+    case remove_spaces(Rest0, State0) of
+        {<<"{", _/binary>> = Rest1, State1} ->
+            {Rest2, State2, Code} = code_block(Rest1, State1, []),
             Method = add_line(#method{
-                return = Name,
+                name = Name,
+                return = State#state.type,
                 static = State#state.static,
                 access = State#state.access,
                 abstract = State#state.abstract,
                 final = State#state.final,
-                params = Params
+                params = Params,
+                code = Code
             }, State),
-            %% TODO add the code part
-            class(Rest2, reset_state(State2), add_method(Class, Method))
+            {Rest2, State2, Method};
+        {_Rest1, State1} ->
+            throw({error, {eparse, State1, missing_code}})
     end.
 
 add_method(#class{methods = Methods} = Class, #method{} = Method) ->
@@ -383,19 +344,13 @@ attribute(<<"=", Rest/binary>>, State, Attrib) ->
     {<<";", Rest0/binary>>, State0, Expression} =
         noether_parser_expr:expression(Rest, incr(State), []),
     {Rest0, incr(State0), Attrib#attribute{init_value = Expression}};
-attribute(<<A:8, _/binary>> = Rest, State,
-          #attribute{name = undefined} = Attrib)
-        when ?IS_ALPHA(A) orelse A =:= $_ ->
-    {NewRest, NewState, Name} = key_name(Rest, State, <<>>),
-    attribute(NewRest, NewState, Attrib#attribute{name = Name});
-attribute(_Rest, State, _Attrib) ->
-    throw({error, {eparse, State, unexpected_attrib_meta}}).
+attribute(_Rest, State, Attrib) ->
+    throw({error, {eparse, State, {unexpected_attrib_meta, Attrib}}}).
 
 remove_spaces(<<SP:8, Rest/binary>>, State) when ?IS_SPACE(SP) ->
     remove_spaces(Rest, incr(State));
 remove_spaces(<<SP:8, Rest/binary>>, State) when ?IS_NEWLINE(SP) ->
     remove_spaces(Rest, new_line(State));
-remove_spaces(<<>>, State) -> {<<>>, State};
 remove_spaces(Rest, State) -> {Rest, State}.
 
 reset_state(State) ->
@@ -403,7 +358,8 @@ reset_state(State) ->
         access = undefined,
         abstract = false,
         static = false,
-        final = false
+        final = false,
+        type = undefined
     }.
 
 incr(State) -> incr(State, 1).
@@ -427,3 +383,96 @@ comment_block(<<A:8, Rest/binary>>, State) when ?IS_NEWLINE(A) ->
     comment_block(Rest, new_line(State));
 comment_block(<<_/utf8, Rest/binary>>, State) ->
     comment_block(Rest, incr(State)).
+
+code_block(Rest, State, Parsed) ->
+    case remove_spaces(Rest, State) of
+        {<<"{", Rest0/binary>>, State0} ->
+            case code(Rest0, State0) of
+                {<<"}", Rest1/binary>>, State1, Code} ->
+                    {Rest1, incr(State1), Parsed ++ [Code]};
+                {<<";", Rest1/binary>>, State1, Code} ->
+                    code_block(Rest1, incr(State1), Parsed ++ [Code]);
+                {_Rest1, State1, _Code} ->
+                    throw({error, {eparse, State1, missing_separator}})
+            end;
+        {<<"}", Rest0/binary>>, State0} ->
+            {Rest0, incr(State0), Parsed}
+    end.
+
+code(<<"break", SP:8, Rest/binary>>, State)
+        when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $; ->
+    {Rest0, State0} = remove_spaces(<<SP:8, Rest/binary>>, incr(State, 5)),
+    {Rest0, State0, break};
+code(<<"continue", SP:8, Rest/binary>>, State)
+        when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $; ->
+    {Rest0, State0} = remove_spaces(<<SP:8, Rest/binary>>, incr(State, 8)),
+    {Rest0, State0, continue};
+code(<<"return", SP:8, Rest/binary>>, State)
+        when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $; ->
+    Rest0 = <<SP:8, Rest/binary>>,
+    State0 = incr(State, 6),
+    case noether_parser_expr:expression(Rest0, State0, []) of
+        {Rest1, State1, []} ->
+            {Rest1, State1, add_line(#return{}, State)};
+        {Rest1, State1, Return} ->
+            {Rest1, State1, add_line(#return{value = Return}, State)}
+    end;
+code(<<"true", SP:8, Rest/binary>>, State)
+        when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $; ->
+    Rest0 = <<SP:8, Rest/binary>>,
+    State0 = incr(State, 4),
+    Parser = noether_parser_expr:add_op(true, []),
+    noether_parser_expr:expression(Rest0, State0, Parser);
+code(<<"false", SP:8, Rest/binary>>, State)
+        when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $; ->
+    Rest0 = <<SP:8, Rest/binary>>,
+    State0 = incr(State, 6),
+    Parser = noether_parser_expr:add_op(false, []),
+    noether_parser_expr:expression(Rest0, State0, Parser);
+% code(<<"if", SP:8, Rest/binary>>, State)
+%         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $( ->
+%     st_if(<<SP:8, Rest/binary>>, incr(State, 2));
+% code(<<"while", SP:8, Rest/binary>>, State)
+%         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $( ->
+%     st_while(<<SP:8, Rest/binary>>, incr(State, 5));
+% code(<<"do", SP:8, Rest/binary>>, State)
+%         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= ${ ->
+%     st_do_while(<<SP:8, Rest/binary>>, incr(Pos, 2));
+% code(<<"for", SP:8, Rest/binary>>, State)
+%         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $( ->
+%     st_for(<<SP:8, Rest0/binary>>, incr(State, 3));
+% code(<<"switch", SP:8, Rest/binary>>, State)
+%         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $( ->
+%     st_switch(<<SP:8, Rest/binary>>, incr(State, 6));
+% code(<<"case", SP:8, Rest/binary>>, State)
+%         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) ->
+%     {<<SP:8, Rest/binary>>, incr(State, 4), case_entry};
+% code(<<"default", SP:8, Rest/binary>>, State)
+%         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $: ->
+%     case remove_spaces(<<SP:8, Rest/binary>>, incr(State, 4)) of
+%         {<<":", Rest0/binary>>, State0} ->
+%             {Rest0, incr(State0, 1), default_entry};
+%         {Rest0, State0} ->
+%             throw({error, {eparse, State, switch_def_wrong}})
+%     end;
+code(<<"//", Rest/binary>>, State) ->
+    {Rest0, State0} = comment_line(Rest, incr(State, 2)),
+    code(Rest0, State0);
+code(<<"/*", Rest/binary>>, State) ->
+    {Rest0, State0} = comment_block(Rest, incr(State, 2)),
+    code(Rest0, State0);
+code(<<A:8,_/binary>> = Rest, State) when ?IS_ALPHA(A) orelse A =:= $_
+                                     orelse ?IS_NUMBER(A)
+                                     orelse A =:= $- orelse A =:= $(
+                                     orelse A =:= $" orelse A =:= $'
+                                     orelse A =:= $$ orelse A =:= $+
+                                     orelse A =:= 126 orelse A =:= $! ->
+    noether_parser_expr:expression(Rest, State, []);
+code(<<Space:8, Rest/binary>>, State) when ?IS_SPACE(Space) ->
+    code(Rest, incr(State));
+code(<<NewLine:8, Rest/binary>>, State) when ?IS_NEWLINE(NewLine) ->
+    code(Rest, new_line(State));
+code(<<A:8, Rest/binary>>, State) when ?IS_ALPHA(A) orelse A =:= $_ ->
+    noether_parser_expr:expression(<<A:8, Rest/binary>>, State, []);
+code(Text, State) ->
+    throw({error, {eparse, State, {unexpected, Text}}}).

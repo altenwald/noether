@@ -8,30 +8,11 @@
 
 -include("noether_parser.hrl").
 
--record(int, {
-    int :: integer(),
-    line :: pos_integer()
-}).
-
--record(float, {
-    float :: float(),
-    line :: pos_integer()
-}).
-
--record(text, {
-    text = <<>> :: binary(),
-    line :: pos_integer()
-}).
-
--record(char, {
-    char :: byte(),
-    line :: pos_integer()
-}).
-
 ?ADD_LINE(int);
 ?ADD_LINE(float);
 ?ADD_LINE(text);
-?ADD_LINE(char).
+?ADD_LINE(char);
+?ADD_LINE(variable).
 
 resolve([]) -> [];
 resolve([{op, Content}]) -> Content.
@@ -127,5 +108,113 @@ expression(<<A:8, _/binary>> = Rest, State, Parsed) when ?OR(A, $", $') ->
 expression(<<".", A:8, _/binary>> = Rest, State, Parsed) when ?IS_NUMBER(A) ->
     {Rest0, State0, [Number]} = number(Rest, State, []),
     expression(Rest0, State0, add_op(Number, Parsed));
+% AND, XOR
+expression(<<Op:3/binary, SP:8, Rest/binary>>, State, Parsed)
+        when (Op =:= <<"and">> orelse Op =:= <<"xor">>)
+        andalso not (?IS_ALPHA(SP) orelse ?IS_NUMBER(SP) orelse SP =:= $_) ->
+    Parsed0 = add_op({Op, precedence(Op), State}, Parsed),
+    expression(Rest, incr(State, 3), Parsed0);
+% OPERATOR 3 LETTERS
+expression(<<Op:3/binary, Rest/binary>>, State, Parsed) when ?IS_OP3(Op) ->
+    Parsed0 = add_op({Op, precedence(Op), State}, Parsed),
+    expression(Rest, incr(State, 3), Parsed0);
+% OR
+expression(<<"or", SP:8, Rest/binary>>, State, Parsed)
+        when not (?IS_ALPHA(SP) orelse ?IS_NUMBER(SP) orelse SP =:= $_) ->
+    Parsed0 = add_op({<<"or">>, precedence(<<"or">>), State}, Parsed),
+    expression(Rest, incr(State, 2), Parsed0);
+% OPERATORS 2 LETTERS
+expression(<<Op:2/binary, Rest/binary>>, State, Parsed) when ?IS_OP2(Op) ->
+    Parsed0 = add_op({Op, precedence(Op), State}, Parsed),
+    expression(Rest, incr(State, 2), Parsed0);
+% OPERATORS 1 LETTER
+expression(<<Op:1/binary, Rest/binary>>, State, Parsed) when ?IS_OP1(Op) ->
+    Parsed0 = add_op({Op, precedence(Op), State}, Parsed),
+    expression(Rest, incr(State), Parsed0);
+% VARIABLE / FUNCTION
+expression(<<A:8, _/binary>> = Rest, State, Parsed)
+        when ?IS_ALPHA(A) orelse A =:= $_ ->
+    {Rest0, State0, Var} = variable(Rest, State, add_line(#variable{}, State)),
+    expression(Rest0, State0, add_op(Var, Parsed));
 expression(<<>>, State, _Parsed) ->
     throw({error, {eparse, State, unexpected_end_expression}}).
+
+
+variable(Rest, State, Variable) ->
+    {Rest0, State0, Name} = noether_parser:key_name(Rest, State, <<>>),
+    {Rest1, State1, Idx} = var_access(Rest0, State0, []),
+    {Rest1, State1, Variable#variable{name = Name, idx = Idx}}.
+
+
+var_access(<<".", Rest/binary>>, State, VarAccess) ->
+    {Rest0, State0, Name} = noether_parser:key_name(Rest, incr(State), <<>>),
+    var_access(Rest0, State0, VarAccess ++ [{object, Name}]);
+var_access(<<"[", Rest/binary>>, State, VarAccess) ->
+    {<<"]", Rest0/binary>>, State0, Idx} = expression(Rest, incr(State), []),
+    var_access(Rest0, incr(State0), VarAccess ++ [{array, Idx}]);
+var_access(<<"(", Rest/binary>>, State, VarAccess) ->
+    {<<")", Rest0/binary>>, State0, Args} = funct_args(Rest, incr(State), []),
+    var_access(Rest0, incr(State0), VarAccess ++ [{call, Args}]);
+var_access(Rest, State, VarAccess) ->
+    {Rest, State, VarAccess}.
+
+
+funct_args(Rest, State, Args) ->
+    case expression(Rest, State, []) of
+        {<<",", Rest0/binary>>, State0, Exp} ->
+            funct_args(Rest0, incr(State0), Args ++ [Exp]);
+        {Rest0, State0, Exp} ->
+            {Rest0, State0, Args ++ [Exp]}
+    end.
+
+%% took from https://docs.oracle.com/javase/tutorial/java/nutsandbolts/operators.html
+
+precedence(<<"=">>) -> {right, 14}; %% assign
+precedence(<<"+=">>) -> {right, 14};
+precedence(<<"-=">>) -> {right, 14};
+precedence(<<"*=">>) -> {right, 14};
+precedence(<<"**=">>) -> {right, 14};
+precedence(<<"/=">>) -> {right, 14};
+precedence(<<".=">>) -> {right, 14};
+precedence(<<"%=">>) -> {right, 14};
+precedence(<<"&=">>) -> {right, 14};
+precedence(<<"|=">>) -> {right, 14};
+precedence(<<"^=">>) -> {right, 14};
+precedence(<<"<<=">>) -> {right, 14};
+precedence(<<">>=">>) -> {right, 14};
+precedence(<<"?">>) -> {right, 13}; %% ternary
+precedence(<<":">>) -> {right, 12}; %% ternary
+precedence(<<"||">>) -> {left, 11}; %% logic
+precedence(<<"or">>) -> {left, 11};
+precedence(<<"xor">>) -> {left, 11};
+precedence(<<"&&">>) -> {left, 10}; %% logic
+precedence(<<"and">>) -> {left, 10};
+precedence(<<"|">>) -> {left, 9}; %% bit by bit
+precedence(<<"^">>) -> {left, 8}; %% bit by bit
+precedence(<<"&">>) -> {left, 7}; %% bit by bit & references
+precedence(<<"==">>) -> {left, 6};
+precedence(<<"!=">>) -> {left, 6};
+precedence(<<"===">>) -> {left, 6};
+precedence(<<"!==">>) -> {left, 6};
+precedence(<<"<>">>) -> {left, 6};
+precedence(<<"<=>">>) -> {left, 6};
+precedence(<<"<">>) -> {left, 5};
+precedence(<<"<=">>) -> {left, 5};
+precedence(<<">">>) -> {left, 5};
+precedence(<<">=">>) -> {left, 5};
+precedence(<<"instanceof">>) -> {left, 5};
+precedence(<<"<<">>) -> {left, 4}; %% bit by bit
+precedence(<<">>">>) -> {left, 4}; %% bit by bit
+precedence(<<">>>">>) -> {left, 4}; %% bit by bit
+precedence(<<"+">>) -> {left, 3};
+precedence(<<"-">>) -> {left, 3};
+precedence(<<"*">>) -> {left, 2};
+precedence(<<"/">>) -> {left, 2};
+precedence(<<"%">>) -> {left, 2};
+precedence(<<"**">>) -> {right, 1}; %% arith
+precedence(<<"++">>) -> {right, 1};
+precedence(<<"--">>) -> {right, 1};
+precedence(<<$~>>) -> {right, 1};
+precedence(<<"!">>) -> {right, 1}; %% logic
+%% cast is right, 1
+precedence(_) -> false.
