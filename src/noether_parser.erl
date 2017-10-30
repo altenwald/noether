@@ -9,7 +9,9 @@
          new_line/1,
          comment_block/2,
          comment_line/2,
-         key_name/3]).
+         key_name/3,
+         remove_spaces/2,
+         method_params/3]).
 
 -include("noether_parser.hrl").
 
@@ -109,15 +111,14 @@ package(<<"class", SP:8, Rest/binary>>, State, Package)
 package(<<"import", SP:8, Rest/binary>>, State, Package)
         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) ->
     {Rest0, State0} = remove_spaces(Rest, incr(State, 7)),
-    {<<";", Rest1/binary>>, State1, Import} = import_name(Rest0, State0, <<>>),
+    {<<";", Rest1/binary>>, State1, Import} = import_name(Rest0, State0, []),
     package(Rest1, incr(State1), add_import(Package, Import));
 package(<<>>, State, Package) ->
     {<<>>, State, Package};
 package(<<A:8, _/binary>>, State, _Parsed) ->
     throw({error, {eparse, State, {not_expected, <<A:8>>}}}).
 
-add_import(#package{imports = Imports} = Package, Import)
-        when is_binary(Import) ->
+add_import(#package{imports = Imports} = Package, Import) ->
     Package#package{imports = [Import|Imports]}.
 
 add_class(#package{classes = Classes} = Package, #class{} = Class) ->
@@ -148,19 +149,21 @@ import_name(<<SP:8, Rest/binary>>, State, Name) when ?IS_SPACE(SP) ->
     import_name(Rest, incr(State), Name);
 import_name(<<SP:8, Rest/binary>>, State, Name) when ?IS_NEWLINE(SP) ->
     import_name(Rest, new_line(State), Name);
-import_name(<<A:8, _/binary>>, State, <<>>) when ?IS_NUMBER(A) ->
+import_name(<<A:8, _/binary>>, State, _Name) when ?IS_NUMBER(A) ->
     throw({error, {eparse, State, import_name_invalid}});
 import_name(<<"*.", _/binary>>, State, _Name) ->
     throw({error, {eparse, State, import_generic_wrong}});
+import_name(<<"*", _/binary>>, State, []) ->
+    throw({error, {eparse, State, import_generic_wrong}});
 import_name(<<"*;", Rest/binary>>, State, Name) ->
-    {<<";", Rest/binary>>, incr(State, 1), <<Name/binary, "*">>};
+    {<<";", Rest/binary>>, incr(State, 1), Name ++ [<<"*">>]};
 import_name(<<A:8, _/binary>> = Rest, State, Name)
         when ?IS_ALPHANUM(A) orelse A =:= $_ ->
     case key_name(Rest, State, <<>>) of
         {<<";", _/binary>> = Rest1, State1, Name1} ->
-            {Rest1, State1, <<Name/binary, Name1/binary>>};
+            {Rest1, State1, Name ++ [Name1]};
         {<<".", Rest1/binary>>, State1, Name1} ->
-            import_name(Rest1, State1, <<Name/binary, Name1/binary, ".">>);
+            import_name(Rest1, State1, Name ++ [Name1]);
         {_Rest1, State1, _Name1} ->
             throw({error, {eparse, State1, import_name_wrong}})
     end.
@@ -253,7 +256,7 @@ class(<<"final", SP:8, _Rest/binary>>, State, _Class)
     throw({error, {eparse, State, double_final}});
 class(<<A:8, _/binary>> = Rest, #state{type = undefined} = State, Class)
         when ?IS_ALPHA(A) orelse A =:= $_ ->
-    case key_name(Rest, State, <<>>) of
+    case type(Rest, State, <<>>) of
         {<<"(", Rest0/binary>>, State0, Name} ->
             {Rest1, State1, Method} = method(Rest0, incr(State0), Name),
             class(Rest1, reset_state(State1), add_method(Class, Method));
@@ -322,7 +325,7 @@ method_params(Rest, State, Params) ->
     end.
 
 method_param(Rest, State, MethodParam) ->
-    {Rest0, State0, Type} = key_name(Rest, State, <<>>),
+    {Rest0, State0, Type} = type(Rest, State, <<>>),
     {Rest1, State1} = remove_spaces(Rest0, State0),
     {Rest2, State2, Name} = key_name(Rest1, State1, <<>>),
     case remove_spaces(Rest2, State2) of
@@ -332,6 +335,23 @@ method_param(Rest, State, MethodParam) ->
         {Rest3, State3} ->
             {Rest3, State3, MethodParam#method_param{type = Type, name = Name}}
     end.
+
+type(<<A:8, _/binary>>, State, <<>>) when ?IS_NUMBER(A) ->
+    throw({error, {eparse, State, type_invalid}});
+type(<<A:8, Rest/binary>>, State, Name)
+        when ?IS_ALPHANUM(A) orelse A =:= $_ ->
+    type(Rest, incr(State), <<Name/binary, A:8>>);
+type(<<"[]", Rest/binary>>, State, Name) ->
+    {Rest, incr(State, 2), {array, Name}};
+type(<<"<", Rest/binary>>, State, Name) ->
+    case key_name(Rest, incr(State), <<>>) of
+        {<<">", Rest0/binary>>, State0, SubTypeName} ->
+            {Rest0, incr(State0), {template, Name, SubTypeName}};
+        {_Rest0, _State0, _Whatever} ->
+            throw({error, {eparse, State, template_wrong}})
+    end;
+type(Rest, State, Parsed) ->
+    {Rest, State, Parsed}.
 
 add_attrib(#class{attributes = Attribs} = Class, #attribute{} = Attrib) ->
     Class#class{attributes = [Attrib|Attribs]}.

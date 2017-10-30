@@ -4,7 +4,7 @@
 
 -export([expression/3]).
 
--import(noether_parser, [incr/1, incr/2, new_line/1]).
+-import(noether_parser, [incr/1, incr/2, new_line/1, remove_spaces/2]).
 
 -include("noether_parser.hrl").
 
@@ -12,7 +12,8 @@
 ?ADD_LINE(float);
 ?ADD_LINE(text);
 ?ADD_LINE(char);
-?ADD_LINE(variable).
+?ADD_LINE(variable);
+?ADD_LINE(instance).
 
 resolve([]) -> [];
 resolve([{op, Content}]) -> Content.
@@ -88,6 +89,20 @@ expression(<<"true", SP:8, Rest/binary>>, State, Parsed)
 expression(<<"false", SP:8, Rest/binary>>, State, Parsed)
         when not (?IS_ALPHANUM(SP) orelse SP =:= $_) ->
     expression(<<SP:8, Rest/binary>>, incr(State, 4), add_op(false, Parsed));
+% NEW ...
+expression(<<"new", SP:8, Rest/binary>>, State, Parsed)
+        when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) ->
+    {Rest0, State0} = remove_spaces(<<SP:8, Rest/binary>>, State),
+    {Rest1, State1, ObjName} = noether_parser:key_name(Rest0, State0, <<>>),
+    case remove_spaces(Rest1, State1) of
+        {<<"(", Rest2/binary>>, State2} ->
+            {Rest3, State3, Args} =
+                noether_parser:method_params(Rest2, State2, []),
+            Instance = add_line(#instance{name = ObjName, args = Args}, State),
+            expression(Rest3, State3, add_op(Instance, Parsed));
+        {_Rest3, State3} ->
+            throw({error, {eparse, State3, missing_construct_params}})
+    end;
 expression(<<"//", Rest/binary>>, State, Parsed) ->
     {Rest0, State0} = noether_parser:comment_line(Rest, State),
     expression(Rest0, State0, Parsed);

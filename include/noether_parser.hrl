@@ -198,6 +198,14 @@
 
 %-type package() :: #package{}.
 
+-record(instance, {
+    name :: binary(),
+    args :: [method_param()],
+    line :: pos_integer()
+}).
+
+-type instance() :: #instance{}.
+
 -record(return, {
     value :: undefined | term(),
     line :: pos_integer()
