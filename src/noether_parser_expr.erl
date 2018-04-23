@@ -4,16 +4,13 @@
 
 -export([expression/3]).
 
--import(noether_parser, [incr/1, incr/2, new_line/1, remove_spaces/2]).
+-import(noether_parser, [incr/1,
+                         incr/2,
+                         new_line/1,
+                         remove_spaces/2,
+                         add_line/2]).
 
 -include("noether_parser.hrl").
-
-?ADD_LINE(int);
-?ADD_LINE(float);
-?ADD_LINE(text);
-?ADD_LINE(char);
-?ADD_LINE(variable);
-?ADD_LINE(instance).
 
 resolve([]) -> [];
 resolve([{op, Content}]) -> solve(Content).
@@ -277,11 +274,8 @@ precedence(_) -> false.
 %     process_incr_decr(Rest, Processed ++ [A]).
 
 solve(Expression) ->
-    io:format("expression => ~p~n", [Expression]),
     Postfix = shunting_yard(parse_negative(Expression), [], []),
-    io:format("postfix => ~p~n", [Postfix]),
     [Operation] = gen_op(Postfix, []),
-    io:format("operation => ~p~n", [Operation]),
     Operation.
 
 operator(O, A, B) -> #operator{sign = O, left = A, right = B}.

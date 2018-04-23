@@ -10,8 +10,10 @@
          comment_block/2,
          comment_line/2,
          key_name/2,
+         type/2,
          remove_spaces/2,
-         method_params/3]).
+         method_params/3,
+         add_line/2]).
 
 -include("noether_parser.hrl").
 
@@ -25,18 +27,24 @@ parse(Content) ->
     {_, _, Parsed} = document(Content, #state{}, undefined),
     Parsed.
 
-?ADD_LINE(package);
-?ADD_LINE(class);
-?ADD_LINE(interface);
+?ADD_LINE(array);
+?ADD_LINE(assign);
 ?ADD_LINE(attribute);
+?ADD_LINE(char);
+?ADD_LINE(class);
+?ADD_LINE(constant);
+?ADD_LINE(if_block);
+?ADD_LINE(instance);
+?ADD_LINE(int);
+?ADD_LINE(interface);
+?ADD_LINE(float);
 ?ADD_LINE(method);
 ?ADD_LINE(method_param);
-?ADD_LINE(return);
-?ADD_LINE(assign);
-?ADD_LINE(constant);
 ?ADD_LINE(operator);
-?ADD_LINE(if_block);
-?ADD_LINE(array).
+?ADD_LINE(package);
+?ADD_LINE(return);
+?ADD_LINE(text);
+?ADD_LINE(variable).
 
 document(<<SP:8, Rest/binary>>, State, undefined) when ?IS_SPACE(SP) ->
     document(Rest, incr(State), undefined);
@@ -264,7 +272,7 @@ class(<<"final", SP:8, _Rest/binary>>, State, _Class)
     throw({error, {eparse, State, double_final}});
 class(<<A:8, _/binary>> = Rest, #state{type = undefined} = State, Class)
         when ?IS_ALPHA(A) orelse A =:= $_ ->
-    case type(Rest, State, <<>>) of
+    case type(Rest, State) of
         {<<"(", Rest0/binary>>, State0, Name} ->
             {Rest1, State1, Method} = method(Rest0, incr(State0), Name),
             class(Rest1, reset_state(State1), add_method(Class, Method));
@@ -361,6 +369,9 @@ modifiers(<<"[]", Rest/binary>>, State, Modifiers) ->
     modifiers(Rest, State, [array|Modifiers]);
 modifiers(Rest, State, Modifiers) ->
     {Rest, State, lists:reverse(Modifiers)}.
+
+type(Text, State) ->
+    type(Text, State, <<>>).
 
 type(<<A:8, _/binary>>, State, <<>>) when ?IS_NUMBER(A) ->
     throw({error, {eparse, State, type_invalid}});

@@ -221,12 +221,6 @@
     line :: pos_integer()
 }).
 
--record(instance, {
-    name :: binary(),
-    args = [], %% TODO: add type
-    line :: pos_integer()
-}).
-
 -record(assign, {
     variable,
     expression,
