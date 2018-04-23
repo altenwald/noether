@@ -147,6 +147,7 @@
 -record(method_param, {
     name :: binary(),
     type :: binary(),
+    final = false :: boolean(),
     line :: pos_integer()
 }).
 
@@ -208,5 +209,45 @@
 -record(variable, {
     name = <<>> :: binary(),
     idx = [] :: [var_access()],
+    type :: binary(),
     line :: pos_integer()
+}).
+
+-record(instance, {
+    name :: binary(),
+    args = [], %% TODO: add type
+    line :: pos_integer()
+}).
+
+-record(assign, {
+    variable,
+    expression,
+    line :: pos_integer()
+}).
+
+
+-record(operator, {
+    sign,
+    left,
+    right,
+    line :: pos_integer()
+}).
+
+-record(constant, {
+    name,
+    value,
+    line :: pos_integer()
+}).
+
+
+-record(if_block, {
+    conditions,
+    true_block,
+    false_block,
+    line
+}).
+
+-record(array, {
+    elements,
+    line
 }).

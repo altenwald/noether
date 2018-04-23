@@ -1,0 +1,113 @@
+package com.data;
+
+import com.java.Integer;
+import com.java.util.*;
+// IMPORTANT: this should be kept in mind to search classes (see below check_class/0)
+
+public class Whatever extends Other implements Else, More {
+//-module('com.data.Whatever').
+//-file("../whatever.nth").
+//-behaviour(noether_class).
+//-export([extends/0]).
+//extends() ->
+//-line(6).
+//    {'com.data.Other', {6, 31}}.
+//-export([implements/0]).
+//implements() ->
+//-line(6).
+//    [{'com.data.Else', {6, 48}}, {'com.data.More', {6, 54}}].
+
+//-export([new/0]).
+//new() ->
+//    construct(noether_object:new(?MODULE)).
+//-export(new_class/0).
+//new_class() ->
+//    noether_class:new(?MODULE).
+
+    public int i = 10;
+    public static String message = "Hello world!";
+    public static final int max = 100;
+//-export([object_attrs/0]).
+//object_attrs() ->
+//-line(23).
+//    [{public, <<"i">>, <<"int">>, 10, {23, 5}}].
+//-export([static_attrs/0]).
+//class_attrs() ->
+//-line(24).
+//    [{public, <<"message">>, <<"String">>, <<"Hello world!">>, {24, 5}},
+//     {public, <<"max">>, <<"int">>, 100, {25, 5}}].
+
+    public Whatever() {
+        this.i = 10;
+    }
+//-export([construct/2]).
+//construct(ClassState0, Object0) ->
+//-line(35).
+//    Object1 = noether_object:set(Object0, [<<"i">>], 10, {35, 9}),
+//    {ClassState0, Object1}.
+
+//-export([destruct/2]).
+//destruct(ClassState0, Object0) ->
+//    {ClassState0, Object0}.
+
+    public int data(int i, int j) {
+        return i + j;
+    }
+//-export([pub_obj_data/4]).
+//pub_obj_data(ClassState0, ObjectState0, I, J) ->
+//    noether_data:check(I, <<"int">>, {46, 21}),
+//    noether_data:check(J, <<"int">>, {36, 28}),
+//    LocalState0 = noether_state:new(),
+//    LocalState1 = noether_state:bulk_set(LocalState0, [{<<"i">>, I}, {<<"j">>, J}]),
+//    Return = noether_state:get(<<"i">>) + noether_state:get(<<"j">>),
+//    {ClassState0, ObjectState0, Return}.
+
+
+    public static int main(String[] args) {
+        Whatever w = new Whatever();
+        int i, j = 0;
+        for (i=0; i<10; i++) {
+            System.out.println(w.data(10, 20));
+            j++;
+        }
+        return 0;
+    }
+//-export([main/2]).
+//pub_class_main(ClassState0, Args) ->
+//    LocalState0 = noether_state:new(),
+//    State1 = noether_state:bulk_set(State0, [
+//        {[<<"w">>], 'com.data.Whatever':new()},
+//        {[<<"i">>], undefined},
+//        {[<<"j">>], 0}
+//    ]),
+//    State2 = noether_loop:for(State1, {62, 9},
+//                              [{<<"i">>, 0}],
+//                              fun(State0) -> {noether_state:get(State0, <<"i">>) < 10, State0} end,
+//                              fun(State0) -> {_, State1} = noether_state:incr(State0, <<"i">>), State1 end,
+//                              fun(State0) ->
+//                                  {_, State1} = noether_object:call(State0, ['Noether.System', {object, <<"out">>}], <<"println">>, [data(noether_state:get(State0, <<"w">>), 10, 20)]),
+//                                  {_, State2} = noether_state:incr(State1, <<"j">>),
+//                                  State2
+//                              end),
+//    {ClassState0, 0}.
+//-export([main/1]).
+//main(Args) ->
+//    Argv = [ list_to_binary(X) || X <- Args ],
+//    ClassState = noether_class:get_state(?MODULE),
+//    {_, Return} = pub_class_main(ClassState, Argv),
+//    Return.
+}
+
+//-export([object_methods/0]).
+//object_methods() ->
+//    [{public, construct, []},
+//     {public, pub_obj_data, [<<"int">>, <<"int">>]}].
+//-export([class_methods/0]).
+//class_methods() ->
+//    [{public, pub_class_main, [<<"int">>, <<"String">>]}].
+//-export(register_class/0).
+//register_class() ->
+//    noether_class:register_class(?MODULE).
+//-export([import_classes/1]).
+//import_classes(Name) ->
+//    noether_class:ensure_loaded(Name, [<<"com.java.Integer">>, <<"com.java.util">>]).

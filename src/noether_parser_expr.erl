@@ -12,10 +12,13 @@
 ?ADD_LINE(float);
 ?ADD_LINE(text);
 ?ADD_LINE(char);
-?ADD_LINE(variable).
+?ADD_LINE(variable);
+?ADD_LINE(assign);
+?ADD_LINE(operator);
+?ADD_LINE(instance).
 
 resolve([]) -> [];
-resolve([{op, Content}]) -> Content.
+resolve([{op, Content}]) -> solve(Content).
 
 add_op(Add, [{op, Content}|Parsed]) when is_list(Add) ->
     [{op, Content ++ Add}|Parsed];
@@ -88,6 +91,20 @@ expression(<<"true", SP:8, Rest/binary>>, State, Parsed)
 expression(<<"false", SP:8, Rest/binary>>, State, Parsed)
         when not (?IS_ALPHANUM(SP) orelse SP =:= $_) ->
     expression(<<SP:8, Rest/binary>>, incr(State, 4), add_op(false, Parsed));
+% NEW ...
+expression(<<"new", SP:8, Rest/binary>>, State, Parsed) when
+        ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) orelse SP =:= $( ->
+    {Rest0, State0} = noether_parser:remove_spaces(<<SP:8, Rest/binary>>, State),
+    {Rest1, State1, ObjName} = noether_parser:key_name(Rest0, State0),
+    Instance = case noether_parser:remove_spaces(Rest1, State1) of
+        {<<"(", Rest2/binary>>, State2} ->
+            {Rest3, State3, Args} = call_args(Rest2, State2, []),
+            add_line(#instance{name = ObjName, args = Args}, State);
+        {Rest3, State3} ->
+            add_line(#instance{name = ObjName}, State)
+    end,
+    expression(Rest3, State3, add_op(Instance, Parsed));
+% COMMENTS
 expression(<<"//", Rest/binary>>, State, Parsed) ->
     {Rest0, State0} = noether_parser:comment_line(Rest, State),
     expression(Rest0, State0, Parsed);
@@ -141,13 +158,13 @@ expression(<<>>, State, _Parsed) ->
 
 
 variable(Rest, State, Variable) ->
-    {Rest0, State0, Name} = noether_parser:key_name(Rest, State, <<>>),
+    {Rest0, State0, Name} = noether_parser:key_name(Rest, State),
     {Rest1, State1, Idx} = var_access(Rest0, State0, []),
     {Rest1, State1, Variable#variable{name = Name, idx = Idx}}.
 
 
 var_access(<<".", Rest/binary>>, State, VarAccess) ->
-    {Rest0, State0, Name} = noether_parser:key_name(Rest, incr(State), <<>>),
+    {Rest0, State0, Name} = noether_parser:key_name(Rest, incr(State)),
     var_access(Rest0, State0, VarAccess ++ [{object, Name}]);
 var_access(<<"[", Rest/binary>>, State, VarAccess) ->
     {<<"]", Rest0/binary>>, State0, Idx} = expression(Rest, incr(State), []),
@@ -166,6 +183,32 @@ funct_args(Rest, State, Args) ->
         {Rest0, State0, Exp} ->
             {Rest0, State0, Args ++ [Exp]}
     end.
+
+
+call_args(<<SP:8, Rest/binary>>, State, Parsed) when ?IS_SPACE(SP) ->
+    call_args(Rest, incr(State), Parsed);
+call_args(<<SP:8, Rest/binary>>, State, Parsed) when ?IS_NEWLINE(SP) ->
+    call_args(Rest, new_line(State), Parsed);
+call_args(<<")",Rest/binary>>, State, Parsed) ->
+    {Rest, incr(State), Parsed};
+call_args(Rest, State, Parsed) when Rest =/= <<>> ->
+    case expression(Rest, State, []) of
+        {<<")",Rest0/binary>>, State0, []} ->
+            {Rest0, incr(State0), Parsed};
+        {<<")",Rest0/binary>>, State0, Arg} ->
+            {Rest0, incr(State0), Parsed ++ [Arg]};
+        {<<",",Rest0/binary>>, State0, Arg} ->
+            call_args(Rest0, incr(State0), Parsed ++ [Arg]);
+        {<<";",_/binary>>, State0, _} ->
+            throw({error, {eparse, State0, {unexpected, <<";">>}}});
+        {Rest, State, _} ->
+            throw({error, {eparse, State, Rest}});
+        {Rest0, State0, []} ->
+            call_args(Rest0, State0, Parsed);
+        {Rest0, State0, Arg} ->
+            call_args(Rest0, State0, Parsed ++ [Arg])
+    end.
+
 
 %% took from https://docs.oracle.com/javase/tutorial/java/nutsandbolts/operators.html
 
@@ -218,3 +261,132 @@ precedence(<<$~>>) -> {right, 1};
 precedence(<<"!">>) -> {right, 1}; %% logic
 %% cast is right, 1
 precedence(_) -> false.
+
+% process_incr_decr(Content) ->
+%     process_incr_decr(Content, []).
+
+% process_incr_decr([], Processed) ->
+%     Processed;
+% process_incr_decr([{<<"++">>,_,Pos},#variable{}=V|Rest], Processed) ->
+%     process_incr_decr(Rest, Processed ++ [{pre_incr, V, Pos}]);
+% process_incr_decr([{<<"--">>,_,Pos},#variable{}=V|Rest], Processed) ->
+%     process_incr_decr(Rest, Processed ++ [{pre_decr, V, Pos}]);
+% process_incr_decr([#variable{}=V,{<<"++">>,_,Pos}|Rest], Processed) ->
+%     process_incr_decr(Rest, Processed ++ [{post_incr, V, Pos}]);
+% process_incr_decr([#variable{}=V,{<<"--">>,_,Pos}|Rest], Processed) ->
+%     process_incr_decr(Rest, Processed ++ [{post_decr, V, Pos}]);
+% process_incr_decr([A|Rest], Processed) ->
+%     process_incr_decr(Rest, Processed ++ [A]).
+
+solve(Expression) ->
+    io:format("expression => ~p~n", [Expression]),
+    Postfix = shunting_yard(parse_negative(Expression), [], []),
+    io:format("postfix => ~p~n", [Postfix]),
+    [Operation] = gen_op(Postfix, []),
+    io:format("operation => ~p~n", [Operation]),
+    Operation.
+
+operator(O, A, B) -> #operator{sign = O, left = A, right = B}.
+
+gen_op([], Stack) ->
+    Stack;
+gen_op([{<<"=">>,{_,_},Pos}|Rest], [B,{operation_not, A, Line}|Stack]) ->
+    Assign = add_line(#assign{variable=A, expression=B}, Pos),
+    gen_op(Rest, [{operation_not, Assign, Line}|Stack]);
+gen_op([{<<"=">>,{_,_},Pos}|Rest], [B,A|Stack]) ->
+    Assign = add_line(#assign{variable=A, expression=B}, Pos),
+    gen_op(Rest, [Assign|Stack]);
+gen_op([{<<O:1/binary,"=">>,{_,_},Pos}|Rest], [B,A|Stack])
+        when ?IS_OP1_ARITH(O) ->
+    Op = add_line(operator(O, A, B), Pos),
+    Assign = add_line(#assign{variable=A, expression=Op}, Pos),
+    gen_op(Rest, [Assign|Stack]);
+gen_op([{<<126>>,{_,_},{_,R,C}}|Rest], [A|Stack]) ->
+    gen_op(Rest, [{operation_bnot, A, {{line,R},{column,C}}}|Stack]);
+gen_op([{<<"!">>,{_,_},{_,R,C}}|Rest], [A|Stack]) ->
+    gen_op(Rest, [{operation_not, A, {{line,R},{column,C}}}|Stack]);
+gen_op([#constant{name = <<"break">>}, #int{int=I}], []) ->
+    [{break, I}];
+gen_op([#constant{name = <<"continue">>}, #int{int=I}], []) ->
+    [{continue, I}];
+gen_op([{<<"->">>,{_,_},Pos}|Rest], [B,#variable{idx=Idx}=A|Stack]) ->
+    Object = case B of
+        #int{int = I} -> add_line({object, noether_data:to_bin(I)}, Pos);
+        #float{float = F} -> add_line({object, noether_data:to_bin(F)}, Pos);
+        #constant{name = Name} -> add_line({object, Name}, Pos);
+        #variable{} -> add_line({object, B}, Pos);
+        % #call{} -> add_line({object, B}, Pos);
+        _ -> throw({eparse, Pos,
+                         {<<"`\"identifier (T_STRING)\"' or "
+                            "`\"variable (T_VARIABLE)\"' or "
+                            "`'{'' or `'$''">>}})
+    end,
+    gen_op(Rest, [A#variable{idx = Idx ++ [Object]}|Stack]);
+gen_op([{<<"++">>, {_,_}, Pos}|Rest], [V|Stack]) ->
+    gen_op(Rest, [{post_incr, V, Pos}|Stack]);
+gen_op([{<<"--">>, {_,_}, Pos}|Rest], [V|Stack]) ->
+    gen_op(Rest, [{post_decr, V, Pos}|Stack]);
+% TODO add the rest of casting operators
+gen_op([{<<"?">>,{_,_},Pos}|Rest],
+       [#operator{sign = <<":">>} = OpElse, Cond|Stack]) ->
+    #operator{
+        left = TrueBlock,
+        right = FalseBlock
+    } = OpElse,
+    IfBlock = #if_block{
+        conditions = Cond,
+        true_block = TrueBlock,
+        false_block = FalseBlock,
+        line = Pos
+    },
+    gen_op(Rest, [IfBlock|Stack]);
+gen_op([{<<"?">>,{_,_},Pos}|_Rest], _Stack) ->
+    throw({eparse, Pos, <<>>});
+gen_op([{Op,{_,_},Pos}|Rest], [B,A|Stack]) ->
+    gen_op(Rest, [add_line(operator(Op,A,B),Pos)|Stack]);
+gen_op([A|Rest], Stack) ->
+    gen_op(Rest, [A|Stack]).
+
+parse_negative(Elements) ->
+    parse_negative(lists:reverse(Elements), []).
+
+parse_negative([#int{}=I,{<<"-">>,{_,_},_},{_,{_,_},_}=Op|Rest], Stack) ->
+    parse_negative([I#int{int=-I#int.int},Op|Rest], Stack);
+parse_negative([#float{}=F,{<<"-">>,{_,_},_},{_,{_,_},_}=Op|Rest], Stack) ->
+    parse_negative([F#float{float=-F#float.float},Op|Rest], Stack);
+parse_negative([A,{<<"-">>,{_,_},_},{_,{_,_},_}=Op|Rest], Stack) ->
+    parse_negative([{operation_minus, A, undefined},Op|Rest], Stack);
+parse_negative([#int{}=I,{<<"-">>,{_,_},_}], Stack) ->
+    [I#int{int=-I#int.int}|Stack];
+parse_negative([#float{}=F,{<<"-">>,{_,_},_}], Stack) ->
+    [F#float{float=-F#float.float}|Stack];
+parse_negative([A,{<<"-">>,{_,_},_}], Stack) ->
+    [{operation_minus, A, undefined}|Stack];
+parse_negative([A|Rest], Stack) ->
+    parse_negative(Rest, [A|Stack]);
+parse_negative([], Stack) ->
+    Stack.
+
+shunting_yard([], [], Postfix) ->
+    Postfix;
+shunting_yard([], OpS, Postfix) ->
+    Postfix ++ OpS;
+shunting_yard([{_,{_,_},_} = Op|Rest], [], Postfix) ->
+    shunting_yard(Rest, [Op], Postfix);
+shunting_yard([#variable{name = Name, type = undefined},
+               #variable{type = undefined} = V|Rest], Stack, Postfix) ->
+    shunting_yard([V#variable{type = Name}|Rest], Stack, Postfix);
+shunting_yard([{_,{left,P1},_} = Op|Rest], [{_,{_,P2},_} = Op1|OpS], Postfix)
+        when P1 > P2 ->
+    shunting_yard(Rest, [Op|OpS], Postfix ++ [Op1]);
+shunting_yard([{_,{_,P1},_} = Op|Rest], [{_,{_,P2},_} = Op1|OpS], Postfix)
+        when P1 >= P2 ->
+    shunting_yard(Rest, [Op|OpS], Postfix ++ [Op1]);
+shunting_yard([{_,{left,P1},_} = Op|Rest], [{_,{_,P2},_}|_] = OpS, Postfix)
+        when P1 =< P2 ->
+    shunting_yard(Rest, [Op|OpS], Postfix);
+shunting_yard([{_,{_,P1},_} = Op|Rest], [{_,{_,P2},_}|_] = OpS, Postfix)
+        when P1 < P2 ->
+    shunting_yard(Rest, [Op|OpS], Postfix);
+shunting_yard([A|Rest], OpS, Postfix) ->
+    shunting_yard(Rest, OpS, Postfix ++ [A]).

@@ -9,7 +9,8 @@
          new_line/1,
          comment_block/2,
          comment_line/2,
-         key_name/3]).
+         key_name/2,
+         remove_spaces/2]).
 
 -include("noether_parser.hrl").
 
@@ -29,7 +30,12 @@ parse(Content) ->
 ?ADD_LINE(attribute);
 ?ADD_LINE(method);
 ?ADD_LINE(method_param);
-?ADD_LINE(return).
+?ADD_LINE(return);
+?ADD_LINE(assign);
+?ADD_LINE(constant);
+?ADD_LINE(operator);
+?ADD_LINE(if_block);
+?ADD_LINE(array).
 
 document(<<SP:8, Rest/binary>>, State, undefined) when ?IS_SPACE(SP) ->
     document(Rest, incr(State), undefined);
@@ -86,7 +92,7 @@ package(<<"abstract", SP:8, _Rest/binary>>, State, _Package)
 package(<<"interface", SP:8, Rest/binary>>, State, Package)
         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) ->
     {Rest0, State0} = remove_spaces(Rest, incr(State, 10)),
-    {Rest1, State1, InterfaceName} = key_name(Rest0, State0, <<>>),
+    {Rest1, State1, InterfaceName} = key_name(Rest0, State0),
     %% TODO add the rest of the attributes for the interface
     Interface0 = add_line(#interface{name = InterfaceName}, State),
     {Rest2, State2, Interface} = interface(Rest1, reset_state(State1), Interface0),
@@ -94,7 +100,7 @@ package(<<"interface", SP:8, Rest/binary>>, State, Package)
 package(<<"class", SP:8, Rest/binary>>, State, Package)
         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) ->
     {Rest0, State0} = remove_spaces(Rest, incr(State, 6)),
-    {Rest1, State1, ClassName} = key_name(Rest0, State0, <<>>),
+    {Rest1, State1, ClassName} = key_name(Rest0, State0),
     Class1 = add_line(#class{name = ClassName,
                              access = State#state.access,
                              abstract = State#state.abstract,
@@ -135,7 +141,7 @@ package_name(<<A:8, _/binary>>, State, <<>>) when ?IS_NUMBER(A) ->
     throw({error, {eparse, State, package_name_invalid}});
 package_name(<<A:8, _/binary>> = Rest, State, Name)
         when ?IS_ALPHANUM(A) orelse A =:= $_ ->
-    case key_name(Rest, State, <<>>) of
+    case key_name(Rest, State) of
         {<<";", _/binary>> = Rest1, State1, Name1} ->
             {Rest1, State1, <<Name/binary, Name1/binary>>};
         {<<".", Rest1/binary>>, State1, Name1} ->
@@ -156,7 +162,7 @@ import_name(<<"*;", Rest/binary>>, State, Name) ->
     {<<";", Rest/binary>>, incr(State, 1), <<Name/binary, "*">>};
 import_name(<<A:8, _/binary>> = Rest, State, Name)
         when ?IS_ALPHANUM(A) orelse A =:= $_ ->
-    case key_name(Rest, State, <<>>) of
+    case key_name(Rest, State) of
         {<<";", _/binary>> = Rest1, State1, Name1} ->
             {Rest1, State1, <<Name/binary, Name1/binary>>};
         {<<".", Rest1/binary>>, State1, Name1} ->
@@ -164,6 +170,9 @@ import_name(<<A:8, _/binary>> = Rest, State, Name)
         {_Rest1, State1, _Name1} ->
             throw({error, {eparse, State1, import_name_wrong}})
     end.
+
+key_name(Text, State) ->
+    key_name(Text, State, <<>>).
 
 key_name(<<A:8, _/binary>>, State, <<>>) when ?IS_NUMBER(A) ->
     throw({error, {eparse, State, key_name_invalid}});
@@ -184,7 +193,7 @@ class_meta(<<SP:8, Rest/binary>>, State, Class) when ?IS_NEWLINE(SP) ->
 class_meta(<<"extends", SP:8, Rest/binary>>, State,
            #class{extends = undefined} = Class)
         when ?IS_SPACE(SP) orelse ?IS_NEWLINE(SP) ->
-    {Rest0, State0, Extends} = key_name(Rest, incr(State, 8), <<>>),
+    {Rest0, State0, Extends} = key_name(Rest, incr(State, 8)),
     class_meta(Rest0, State0, Class#class{extends = Extends});
 class_meta(<<"implements", SP:8, Rest/binary>>, State,
            #class{implements = []} = Class)
@@ -196,7 +205,7 @@ class_meta(<<"{", _/binary>> = Rest, State, Class) ->
     {Rest, State, Class}.
 
 implements(Rest, State, Implements) ->
-    {Rest0, State0, ImplmentName} = key_name(Rest, State, <<>>),
+    {Rest0, State0, ImplmentName} = key_name(Rest, State),
     case remove_spaces(Rest0, State0) of
         {<<",", Rest1/binary>>, State1} ->
             {Rest2, State2} = remove_spaces(Rest1, incr(State1)),
@@ -253,7 +262,7 @@ class(<<"final", SP:8, _Rest/binary>>, State, _Class)
     throw({error, {eparse, State, double_final}});
 class(<<A:8, _/binary>> = Rest, #state{type = undefined} = State, Class)
         when ?IS_ALPHA(A) orelse A =:= $_ ->
-    case key_name(Rest, State, <<>>) of
+    case key_name(Rest, State) of
         {<<"(", Rest0/binary>>, State0, Name} ->
             {Rest1, State1, Method} = method(Rest0, incr(State0), Name),
             class(Rest1, reset_state(State1), add_method(Class, Method));
@@ -262,7 +271,7 @@ class(<<A:8, _/binary>> = Rest, #state{type = undefined} = State, Class)
     end;
 class(<<A:8, _/binary>> = Rest, State, Class)
         when ?IS_ALPHA(A) orelse A =:= $_ ->
-    {Rest0, State0, Name} = key_name(Rest, State, <<>>),
+    {Rest0, State0, Name} = key_name(Rest, State),
     case remove_spaces(Rest0, State0) of
         {<<"(", Rest1/binary>>, State1} ->
             {Rest2, State2, Method} = method(Rest1, incr(State1), Name),
@@ -322,16 +331,34 @@ method_params(Rest, State, Params) ->
     end.
 
 method_param(Rest, State, MethodParam) ->
-    {Rest0, State0, Type} = key_name(Rest, State, <<>>),
-    {Rest1, State1} = remove_spaces(Rest0, State0),
-    {Rest2, State2, Name} = key_name(Rest1, State1, <<>>),
-    case remove_spaces(Rest2, State2) of
-        {<<"=", _/binary>>, State3} ->
+    {{Rest0, State0}, MethodParam0} = case key_name(Rest, State) of
+        {Rest0_0, State0_0, <<"final">>} ->
+            {R0, S0, T} = key_name(Rest0_0, State0_0),
+            {{R0, S0}, MethodParam#method_param{type = T, final = true}};
+        {Rest0_1, State0_1, T} ->
+            {{Rest0_1, State0_1}, MethodParam#method_param{type = T}}
+    end,
+    {Rest1, State1, MethodParam1} = case modifiers(Rest0, State0, []) of
+        {Rest1_0, State1_0, []} ->
+            {Rest1_0, State1_0, MethodParam0};
+        {Rest1_1, State1_1, Mod} ->
+            {Rest1_1, State1_1, MethodParam0#method_param{type = [T|Mod]}}
+    end,
+    {Rest2, State2} = remove_spaces(Rest1, State1),
+    {Rest3, State3, Name} = key_name(Rest2, State2),
+    case remove_spaces(Rest3, State3) of
+        {<<"=", _/binary>>, State4} ->
             %% TODO: literal (string, number or constant)
-            throw({error, {eparse, State3, default_values_not_supported}});
-        {Rest3, State3} ->
-            {Rest3, State3, MethodParam#method_param{type = Type, name = Name}}
+            throw({error, {eparse, State4, default_values_not_supported}});
+        {Rest4, State4} ->
+            MethodParam2 = MethodParam1#method_param{name = Name},
+            {Rest4, State4, MethodParam2}
     end.
+
+modifiers(<<"[]", Rest/binary>>, State, Modifiers) ->
+    modifiers(Rest, State, [array|Modifiers]);
+modifiers(Rest, State, Modifiers) ->
+    {Rest, State, lists:reverse(Modifiers)}.
 
 add_attrib(#class{attributes = Attribs} = Class, #attribute{} = Attrib) ->
     Class#class{attributes = [Attrib|Attribs]}.
